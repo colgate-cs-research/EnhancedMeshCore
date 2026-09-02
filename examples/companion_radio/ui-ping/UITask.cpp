@@ -23,6 +23,10 @@
   #define UI_RECENT_LIST_SIZE 4
 #endif
 
+#ifndef UI_CONTACTS_LIST_SIZE
+  #define UI_CONTACTS_LIST_SIZE 3
+#endif
+
 #if UI_HAS_JOYSTICK
   #define PRESS_LABEL "press Enter"
 #else
@@ -91,7 +95,7 @@ public:
 class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
-    //RECENT,
+    PING_CONTACT,
     //RADIO,
     BLUETOOTH,
     ADVERT,
@@ -110,8 +114,11 @@ class HomeScreen : public UIScreen {
   SensorManager* _sensors;
   NodePrefs* _node_prefs;
   uint8_t _page;
+  int8_t _contact_idx = -1;
+  uint8_t _contact_count = 0;
   bool _shutdown_init;
-  AdvertPath recent[UI_RECENT_LIST_SIZE];
+  //AdvertPath recent[UI_CONTACTS_LIST_SIZE];
+  ContactInfo contacts[UI_CONTACTS_LIST_SIZE];
 
   // Uptime tracking
   // Stores the last 32-bit millis() value used to calculate elapsed time.
@@ -278,31 +285,31 @@ public:
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         display.drawTextCentered(display.width() / 2, 43, tmp);
       }
-    /*} else if (_page == HomePage::RECENT) {
-      the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
+    } else if (_page == HomePage::PING_CONTACT) {
       display.setColor(UIColor::primary_txt);
-      int y = 20;
-      for (int i = 0; i < UI_RECENT_LIST_SIZE; i++, y += 11) {
-        auto a = &recent[i];
-        if (a->name[0] == 0) continue;  // empty slot
-        int secs = _rtc->getCurrentTime() - a->recv_timestamp;
-        if (secs < 60) {
-          sprintf(tmp, "%ds", secs);
-        } else if (secs < 60*60) {
-          sprintf(tmp, "%dm", secs / 60);
-        } else {
-          sprintf(tmp, "%dh", secs / (60*60));
+      display.setTextSize(1);
+      _contact_count = 0;
+      for (int slot = 0; slot < the_mesh.getTotalContactSlots() && _contact_count < UI_CONTACTS_LIST_SIZE; slot++) {
+        ContactInfo c;
+        the_mesh.getContactByIdx(slot, c);
+        if (c.name[0] == 0) continue;  // empty slot
+        if (c.type != ADV_TYPE_CHAT) continue;  // Only include chat contacts
+        contacts[_contact_count] = c;
+        if (_contact_idx < 0) {
+          _contact_idx = _contact_count; // default to first contact selected
         }
 
-        int timestamp_width = display.getTextWidth(tmp);
-        int max_name_width = display.width() - timestamp_width - 1;
+        if (_contact_count == _contact_idx) {
+          display.drawTextLeftAlign(0, (_contact_count * 11) + 20, "> ");  // highlight selected contact
+        }
 
-        char filtered_recent_name[sizeof(a->name)];
-        display.translateUTF8ToBlocks(filtered_recent_name, a->name, sizeof(filtered_recent_name));
-        display.drawTextEllipsized(0, y, max_name_width, filtered_recent_name);
-        display.setCursor(display.width() - timestamp_width - 1, y);
-        display.print(tmp);
-      }*/
+        char filtered_contact_name[sizeof(c.name)];
+        display.translateUTF8ToBlocks(filtered_contact_name, c.name, sizeof(filtered_contact_name));
+        display.drawTextEllipsized(display.getTextWidth("> "), (_contact_count * 11) + 20, display.width() - 2, filtered_contact_name);
+        _contact_count++;    
+      }
+
+      display.drawTextCentered(display.width() / 2, display.height() - 11, "echo: " PRESS_LABEL);
     /*} else if (_page == HomePage::RADIO) {
       display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
@@ -321,7 +328,7 @@ public:
       display.print(tmp);
       display.setCursor(0, 53);
       sprintf(tmp, "Noise floor: %d", radio_driver.getNoiseFloor());
-      display.print(tmp);
+      display.print(tmp);*/
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18,
@@ -334,7 +341,7 @@ public:
       display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
       display.setColor(UIColor::secondary_txt);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "advert: " PRESS_LABEL);*/
+      display.drawTextCentered(display.width() / 2, 64 - 11, "advert: " PRESS_LABEL);
 #if ENV_INCLUDE_GPS == 1
     } else if (_page == HomePage::GPS) {
       LocationProvider* nmea = sensors.getLocationProvider();
@@ -479,9 +486,35 @@ public:
     }*/
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _page = (_page + 1) % HomePage::Count;
-      /*if (_page == HomePage::RECENT) {
-        _task->showAlert("Recent adverts", 800);
-      }*/
+      return true;
+    }
+    if ((c == KEY_LEFT || c == KEY_PREV) && _page == HomePage::PING_CONTACT) {
+      _contact_idx = (_contact_idx + 1) % _contact_count;
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::PING_CONTACT) {
+      if (_contact_idx < 0 || _contact_idx >= _contact_count) {
+        _task->showAlert("No contact selected", 1000);
+        return false;
+      }
+      uint32_t expected_ack;
+      uint32_t est_timeout;
+
+      int result = the_mesh.sendMessage(
+            contacts[_contact_idx],
+            the_mesh.getRTCClock()->getCurrentTime(),
+            0,                  // attempt
+            "Echo request",
+            expected_ack, 
+            est_timeout
+        );
+    
+      if (result == MSG_SEND_FAILED) {
+        _task->showAlert("Send failed", 1000);
+        return false;
+      }
+      
+      _task->showAlert("Sent echo request", 1000);
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
