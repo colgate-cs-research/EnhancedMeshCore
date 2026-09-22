@@ -27,6 +27,10 @@
   #define UI_CONTACTS_LIST_SIZE 3
 #endif
 
+#ifndef UI_MESSAGES_LIST_SIZE
+  #define UI_MESSAGES_LIST_SIZE 4
+#endif
+
 #if UI_HAS_JOYSTICK
   #define PRESS_LABEL "press Enter"
 #else
@@ -95,6 +99,7 @@ public:
 class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
+    SEND,
     PING_CONTACT,
     //RADIO,
     BLUETOOTH,
@@ -285,6 +290,11 @@ public:
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         display.drawTextCentered(display.width() / 2, 43, tmp);
       }
+    } else if (_page == HomePage::SEND) {
+      display.setColor(UIColor::corp_blue);
+      //display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "send msg: " PRESS_LABEL);
     } else if (_page == HomePage::PING_CONTACT) {
       display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
@@ -492,6 +502,10 @@ public:
       _contact_idx = (_contact_idx + 1) % _contact_count;
       return true;
     }
+    if (c == KEY_ENTER && _page == HomePage::SEND) {
+      _task->gotoMsgSendScreen();
+      return true;
+    }
     if (c == KEY_ENTER && _page == HomePage::PING_CONTACT) {
       if (_contact_idx < 0 || _contact_idx >= _contact_count) {
         _task->showAlert("No contact selected", 1000);
@@ -552,6 +566,157 @@ public:
       return true;
     }
     return false;
+  }
+};
+
+class MsgSendScreen : public UIScreen {
+  UITask* _task;
+  enum Steps {
+    MESSAGE,
+    DESTINATION,
+    SENT,
+    Count
+  };
+  uint8_t _step;
+  int8_t _contact_idx;
+  uint8_t _contact_count;
+  int8_t _message_idx;
+  uint8_t _message_count;
+
+  ContactInfo contacts[UI_CONTACTS_LIST_SIZE];
+  const char* messages[UI_MESSAGES_LIST_SIZE];
+
+  void renderTitle(DisplayDriver& display, const char* title) {
+    display.setCursor(0, 0);
+    display.print(title);
+    display.drawRect(0, 11, display.width(), 1);  // horiz line
+  }
+
+  // prompt for the key that advances this step, eg. "send: long press"
+  void renderPrompt(DisplayDriver& display, const char* action) {
+    display.drawTextCentered(display.width() / 2, display.height() - 11, action);
+  }
+
+  // one row of a selectable list, marked with "> " when it is the current selection
+  void renderListItem(DisplayDriver& display, int i, bool selected, const char* text) {
+    int y = (i * 9) + 14;
+    if (selected) {
+      display.drawTextLeftAlign(0, y, "> ");
+    }
+    display.drawTextEllipsized(display.getTextWidth("> "), y, display.width() - 2, text);
+  }
+
+public:
+  MsgSendScreen(UITask* task) : _task(task) {
+    begin();
+  }
+
+  void begin() {
+    _step = 0;
+
+    _message_count = 0;
+    messages[_message_count++] = "Ping";
+    messages[_message_count++] = "Yes";
+    messages[_message_count++] = "No";
+    _message_idx = (_message_count > 0) ? 0 : -1;  // default to first message selected
+
+    _contact_count = 0;
+    for (int slot = 0; slot < the_mesh.getTotalContactSlots() && _contact_count < UI_CONTACTS_LIST_SIZE; slot++) {
+      ContactInfo c;
+      if (!the_mesh.getContactByIdx(slot, c)) continue;  // no contact in this slot
+      if (c.name[0] == 0) continue;  // empty slot
+      if (c.type != ADV_TYPE_CHAT) continue;  // Only include chat contacts
+      contacts[_contact_count++] = c;
+    }
+    _contact_idx = (_contact_count > 0) ? 0 : -1;  // default to first contact selected
+  }
+
+  int render(DisplayDriver& display) override {
+    display.setColor(UIColor::primary_txt);
+    display.setTextSize(1);
+    if (_step == MsgSendScreen::MESSAGE) {
+      renderTitle(display, "Message");
+
+      for (int i = 0; i < _message_count; i++) {
+        renderListItem(display, i, i == _message_idx, messages[i]);
+      }
+
+      renderPrompt(display, "select: " PRESS_LABEL);
+    } else if (_step == MsgSendScreen::DESTINATION) {
+      renderTitle(display, "Destination");
+
+      for (int i = 0; i < _contact_count; i++) {
+        char filtered_contact_name[sizeof(contacts[i].name)];
+        display.translateUTF8ToBlocks(filtered_contact_name, contacts[i].name, sizeof(filtered_contact_name));
+        renderListItem(display, i, i == _contact_idx, filtered_contact_name);
+      }
+
+      renderPrompt(display, "send: " PRESS_LABEL);
+    } else if (_step == MsgSendScreen::SENT) {
+      renderTitle(display, "Sent");
+
+      char filtered_contact_name[sizeof(contacts[0].name)];
+      display.translateUTF8ToBlocks(filtered_contact_name, contacts[_contact_idx].name, sizeof(filtered_contact_name));
+      renderListItem(display, 0, false, messages[_message_idx]);
+      renderListItem(display, 1, false, filtered_contact_name);
+
+      renderPrompt(display, "done: " PRESS_LABEL);
+    }
+    return 5000;   // next render after 5000 ms
+  }
+
+  bool handleInput(char c) override {
+    if (c == KEY_LEFT || c == KEY_PREV) {
+      _task->gotoHomeScreen();
+      return true;
+    }
+    if (c == KEY_ENTER && _step == MsgSendScreen::MESSAGE) {
+      if (_message_idx < 0 || _message_idx >= _message_count) {
+        _task->showAlert("No message selected", 1000);
+        return false;
+      }
+      _step = MsgSendScreen::DESTINATION;
+      return true;
+    }
+    if (c == KEY_ENTER && _step == MsgSendScreen::DESTINATION) {
+      if (_contact_idx < 0 || _contact_idx >= _contact_count) {
+        _task->showAlert("No contact selected", 1000);
+        return false;
+      }
+      uint32_t expected_ack;
+      uint32_t est_timeout;
+
+      int result = the_mesh.sendMessage(
+            contacts[_contact_idx],
+            the_mesh.getRTCClock()->getCurrentTime(),
+            0,                  // attempt
+            messages[_message_idx],
+            expected_ack,
+            est_timeout
+        );
+
+      if (result == MSG_SEND_FAILED) {
+        _task->showAlert("Send failed", 1000);
+        return false;
+      }
+
+      _task->showAlert("Message sent", 1000);
+      _step = MsgSendScreen::SENT;
+      return true;
+    }
+    if (c == KEY_ENTER && _step == MsgSendScreen::SENT) {
+      _task->gotoHomeScreen();
+      return true;
+    }
+    if ((c == KEY_RIGHT || c == KEY_NEXT) && _step == MsgSendScreen::MESSAGE && _message_count > 0) {
+      _message_idx = (_message_idx + 1) % _message_count;
+      return true;
+    }
+    if ((c == KEY_RIGHT || c == KEY_NEXT) && _step == MsgSendScreen::DESTINATION) {
+      _contact_idx = (_contact_idx + 1) % _contact_count;
+      return true;
+    }
+    return false;  // not implemented yet
   }
 };
 
@@ -679,9 +844,16 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
+  msg_send = new MsgSendScreen(this);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
   setCurrScreen(splash);
 }
+
+void UITask::gotoMsgSendScreen() {
+  ((MsgSendScreen *)msg_send)->begin();
+  setCurrScreen(msg_send);
+}
+
 
 void UITask::showAlert(const char* text, int duration_millis) {
   strcpy(_alert, text);

@@ -50,6 +50,7 @@ class UITask : public AbstractUITask {
 
   UIScreen* splash;
   UIScreen* home;
+  UIScreen* msg_send;
   UIScreen* msg_preview;
   UIScreen* curr;
 
@@ -73,6 +74,7 @@ public:
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
   void gotoHomeScreen() { setCurrScreen(home); }
+  void gotoMsgSendScreen();
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
   bool hasDisplay() const { return _display != NULL; }
