@@ -10,6 +10,7 @@
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
 #endif
 #define BOOT_SCREEN_MILLIS   3000   // 3 seconds
+#define SENT_SCREEN_MILLIS   2000   // 2 seconds
 
 #ifdef PIN_STATUS_LED
 #define LED_ON_MILLIS     20
@@ -100,10 +101,10 @@ class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
     SEND,
-    PING_CONTACT,
+    //PING_CONTACT,
     //RADIO,
     BLUETOOTH,
-    ADVERT,
+    //ADVERT,
 #if ENV_INCLUDE_GPS == 1
     GPS,
 #endif
@@ -119,11 +120,11 @@ class HomeScreen : public UIScreen {
   SensorManager* _sensors;
   NodePrefs* _node_prefs;
   uint8_t _page;
-  int8_t _contact_idx = -1;
-  uint8_t _contact_count = 0;
+  //int8_t _contact_idx = -1;
+  //uint8_t _contact_count = 0;
   bool _shutdown_init;
   //AdvertPath recent[UI_CONTACTS_LIST_SIZE];
-  ContactInfo contacts[UI_CONTACTS_LIST_SIZE];
+  //ContactInfo contacts[UI_CONTACTS_LIST_SIZE];
 
   // Uptime tracking
   // Stores the last 32-bit millis() value used to calculate elapsed time.
@@ -292,10 +293,10 @@ public:
       }
     } else if (_page == HomePage::SEND) {
       display.setColor(UIColor::corp_blue);
-      //display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
+      display.drawXbm((display.width() - 32) / 2, 18, envelope_icon, 32, 32);
       display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 64 - 11, "send msg: " PRESS_LABEL);
-    } else if (_page == HomePage::PING_CONTACT) {
+    /*} else if (_page == HomePage::PING_CONTACT) {
       display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
       _contact_count = 0;
@@ -319,7 +320,7 @@ public:
         _contact_count++;    
       }
 
-      display.drawTextCentered(display.width() / 2, display.height() - 11, "echo: " PRESS_LABEL);
+      display.drawTextCentered(display.width() / 2, display.height() - 11, "echo: " PRESS_LABEL);*/
     /*} else if (_page == HomePage::RADIO) {
       display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
@@ -347,11 +348,11 @@ public:
       display.setColor(UIColor::secondary_txt);
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
-    } else if (_page == HomePage::ADVERT) {
+    /*} else if (_page == HomePage::ADVERT) {
       display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
       display.setColor(UIColor::secondary_txt);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "advert: " PRESS_LABEL);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "advert: " PRESS_LABEL);*/
 #if ENV_INCLUDE_GPS == 1
     } else if (_page == HomePage::GPS) {
       LocationProvider* nmea = sensors.getLocationProvider();
@@ -498,15 +499,15 @@ public:
       _page = (_page + 1) % HomePage::Count;
       return true;
     }
-    if ((c == KEY_LEFT || c == KEY_PREV) && _page == HomePage::PING_CONTACT) {
+    /*if ((c == KEY_LEFT || c == KEY_PREV) && _page == HomePage::PING_CONTACT) {
       _contact_idx = (_contact_idx + 1) % _contact_count;
       return true;
-    }
+    }*/
     if (c == KEY_ENTER && _page == HomePage::SEND) {
       _task->gotoMsgSendScreen();
       return true;
     }
-    if (c == KEY_ENTER && _page == HomePage::PING_CONTACT) {
+    /*if (c == KEY_ENTER && _page == HomePage::PING_CONTACT) {
       if (_contact_idx < 0 || _contact_idx >= _contact_count) {
         _task->showAlert("No contact selected", 1000);
         return false;
@@ -530,7 +531,7 @@ public:
       
       _task->showAlert("Sent echo request", 1000);
       return true;
-    }
+    }*/
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -539,7 +540,7 @@ public:
       }
       return true;
     }
-    if (c == KEY_ENTER && _page == HomePage::ADVERT) {
+    /*if (c == KEY_ENTER && _page == HomePage::ADVERT) {
       _task->notify(UIEventType::ack);
       if (the_mesh.advert()) {
         _task->showAlert("Advert sent!", 1000);
@@ -547,7 +548,7 @@ public:
         _task->showAlert("Advert failed..", 1000);
       }
       return true;
-    }
+    }*/
 #if ENV_INCLUDE_GPS == 1
     if (c == KEY_ENTER && _page == HomePage::GPS) {
       _task->toggleGPS();
@@ -582,6 +583,7 @@ class MsgSendScreen : public UIScreen {
   uint8_t _contact_count;
   int8_t _message_idx;
   uint8_t _message_count;
+  unsigned long _dismiss_after;   // when to leave the SENT step, 0 = not counting down
 
   ContactInfo contacts[UI_CONTACTS_LIST_SIZE];
   const char* messages[UI_MESSAGES_LIST_SIZE];
@@ -613,6 +615,7 @@ public:
 
   void begin() {
     _step = 0;
+    _dismiss_after = 0;
 
     _message_count = 0;
     messages[_message_count++] = "Ping";
@@ -629,6 +632,13 @@ public:
       contacts[_contact_count++] = c;
     }
     _contact_idx = (_contact_count > 0) ? 0 : -1;  // default to first contact selected
+  }
+
+  void poll() override {
+    if (_dismiss_after && millis() >= _dismiss_after) {
+      _dismiss_after = 0;
+      _task->gotoHomeScreen();
+    }
   }
 
   int render(DisplayDriver& display) override {
@@ -702,6 +712,7 @@ public:
 
       _task->showAlert("Message sent", 1000);
       _step = MsgSendScreen::SENT;
+      _dismiss_after = millis() + SENT_SCREEN_MILLIS;  // then return to the home screen
       return true;
     }
     if (c == KEY_ENTER && _step == MsgSendScreen::SENT) {
