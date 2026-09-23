@@ -98,7 +98,7 @@ public:
 
     display.setColor(UIColor::primary_txt);
     display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 40, "ui-ping");
+    display.drawTextCentered(display.width()/2, 40, "ui-enhanced");
 
     display.setColor(UIColor::secondary_txt);
     display.setTextSize(1);
