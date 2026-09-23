@@ -10,7 +10,6 @@
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
 #endif
 #define BOOT_SCREEN_MILLIS   3000   // 3 seconds
-#define SENT_SCREEN_MILLIS   2000   // 2 seconds
 
 #ifdef PIN_STATUS_LED
 #define LED_ON_MILLIS     20
@@ -24,8 +23,8 @@
   #define UI_RECENT_LIST_SIZE 4
 #endif
 
-#ifndef UI_CONTACTS_LIST_SIZE
-  #define UI_CONTACTS_LIST_SIZE 5
+#ifndef UI_DESTS_LIST_SIZE
+  #define UI_DESTS_LIST_SIZE 12   // total destinations offered, not how many fit on screen
 #endif
 
 #ifndef UI_MESSAGES_LIST_SIZE
@@ -47,6 +46,13 @@
   #define PRESS_LABEL "press Enter"
 #else
   #define PRESS_LABEL "long press"
+#endif
+
+// MyMesh::begin only randomizes the pin per session when it's left at the default
+#if defined(BLE_PIN_CODE) && BLE_PIN_CODE == 123456
+  #define UI_BLE_PIN_IS_RANDOM 1
+#else
+  #define UI_BLE_PIN_IS_RANDOM 0
 #endif
 
 #include "icons.h"
@@ -112,7 +118,6 @@ class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
     SEND,
-    //PING_CONTACT,
     //RADIO,
     BLUETOOTH,
     //ADVERT,
@@ -296,7 +301,7 @@ public:
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< Connected >");
 
-      } else if (the_mesh.getBLEPin() != 0) { // BT pin
+      } else if (UI_BLE_PIN_IS_RANDOM && _node_prefs->ble_pin == 0 && the_mesh.getBLEPin() != 0) { // random BT pin
         display.setColor(UIColor::warning_txt);
         display.setTextSize(2);
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
@@ -307,31 +312,6 @@ public:
       display.drawXbm((display.width() - 32) / 2, 18, envelope_icon, 32, 32);
       display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 64 - 11, "send msg: " PRESS_LABEL);
-    /*} else if (_page == HomePage::PING_CONTACT) {
-      display.setColor(UIColor::primary_txt);
-      display.setTextSize(1);
-      _contact_count = 0;
-      for (int slot = 0; slot < the_mesh.getTotalContactSlots() && _contact_count < UI_CONTACTS_LIST_SIZE; slot++) {
-        ContactInfo c;
-        the_mesh.getContactByIdx(slot, c);
-        if (c.name[0] == 0) continue;  // empty slot
-        if (c.type != ADV_TYPE_CHAT) continue;  // Only include chat contacts
-        contacts[_contact_count] = c;
-        if (_contact_idx < 0) {
-          _contact_idx = _contact_count; // default to first contact selected
-        }
-
-        if (_contact_count == _contact_idx) {
-          display.drawTextLeftAlign(0, (_contact_count * 11) + 20, "> ");  // highlight selected contact
-        }
-
-        char filtered_contact_name[sizeof(c.name)];
-        display.translateUTF8ToBlocks(filtered_contact_name, c.name, sizeof(filtered_contact_name));
-        display.drawTextEllipsized(display.getTextWidth("> "), (_contact_count * 11) + 20, display.width() - 2, filtered_contact_name);
-        _contact_count++;    
-      }
-
-      display.drawTextCentered(display.width() / 2, display.height() - 11, "echo: " PRESS_LABEL);*/
     /*} else if (_page == HomePage::RADIO) {
       display.setColor(UIColor::primary_txt);
       display.setTextSize(1);
@@ -510,39 +490,10 @@ public:
       _page = (_page + 1) % HomePage::Count;
       return true;
     }
-    /*if ((c == KEY_LEFT || c == KEY_PREV) && _page == HomePage::PING_CONTACT) {
-      _contact_idx = (_contact_idx + 1) % _contact_count;
-      return true;
-    }*/
     if (c == KEY_ENTER && _page == HomePage::SEND) {
       _task->gotoMsgSendScreen();
       return true;
     }
-    /*if (c == KEY_ENTER && _page == HomePage::PING_CONTACT) {
-      if (_contact_idx < 0 || _contact_idx >= _contact_count) {
-        _task->showAlert("No contact selected", 1000);
-        return false;
-      }
-      uint32_t expected_ack;
-      uint32_t est_timeout;
-
-      int result = the_mesh.sendMessage(
-            contacts[_contact_idx],
-            the_mesh.getRTCClock()->getCurrentTime(),
-            0,                  // attempt
-            "Echo request",
-            expected_ack, 
-            est_timeout
-        );
-    
-      if (result == MSG_SEND_FAILED) {
-        _task->showAlert("Send failed", 1000);
-        return false;
-      }
-      
-      _task->showAlert("Sent echo request", 1000);
-      return true;
-    }*/
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -586,18 +537,24 @@ class MsgSendScreen : public UIScreen {
   enum Steps {
     MESSAGE,
     DESTINATION,
-    SENT,
     Count
   };
+  // a contact or a channel to send to. Only what's needed to show the item is kept; the
+  // contact/channel itself is re-read from the_mesh at send time, so it can't go stale.
+  struct Destination {
+    char name[34];      // as shown in the list, channels prefixed with '#'
+    uint8_t slot;       // index into the_mesh's contact or channel table
+    bool is_channel;
+  };
+
   uint8_t _step;
-  int8_t _contact_idx;
-  uint8_t _contact_count;
+  int8_t _dest_idx;
+  uint8_t _dest_count;
   int8_t _message_idx;
   uint8_t _message_count;
-  uint8_t _message_top;           // first message shown, when the list is too long to fit
-  unsigned long _dismiss_after;   // when to leave the SENT step, 0 = not counting down
+  uint8_t _top;                   // first item shown of whichever list this step lists
 
-  ContactInfo contacts[UI_CONTACTS_LIST_SIZE];
+  Destination dests[UI_DESTS_LIST_SIZE];
   const char* messages[UI_MESSAGES_LIST_SIZE];
 
   void renderTitle(DisplayDriver& display, const char* title) {
@@ -647,21 +604,21 @@ class MsgSendScreen : public UIScreen {
     }
   }
 
-  // how many message slots fit below the title rule.
-  int numVisibleMessages(DisplayDriver& display) {
-    // the last message needs room for its text, but not for the gap that follows it
-    int num = (display.height() - UI_LIST_TOP_Y + UI_ITEM_GAP) / UI_MESSAGE_SLOT_H;
+  // how many slots of the given height fit between the title rule and bottom.
+  int numVisible(int bottom, int slot_height) {
+    // the last slot needs room for its text, but not for the gap that follows it
+    int num = (bottom - UI_LIST_TOP_Y + UI_ITEM_GAP) / slot_height;
     return (num < 1) ? 1 : num;
   }
 
-  // scrolls the message list so the selected message is visible
-  void scrollMessagesIntoView(int num_visible) {
-    if (_message_idx < 0) {
-      _message_top = 0;
-    } else if (_message_idx < _message_top) {
-      _message_top = _message_idx;
-    } else if (_message_idx >= _message_top + num_visible) {
-      _message_top = _message_idx - num_visible + 1;
+  // scrolls a list so the selected item is visible
+  void scrollIntoView(int8_t selected, int num_visible, uint8_t& top) {
+    if (selected < 0) {
+      top = 0;
+    } else if (selected < top) {
+      top = selected;
+    } else if (selected >= top + num_visible) {
+      top = selected - num_visible + 1;
     }
   }
 
@@ -672,7 +629,6 @@ public:
 
   void begin() {
     _step = 0;
-    _dismiss_after = 0;
 
     _message_count = 0;
     messages[_message_count++] = "Can I go the library?";
@@ -683,24 +639,34 @@ public:
     messages[_message_count++] = "No";
     messages[_message_count++] = "Where are you?";
     _message_idx = (_message_count > 0) ? 0 : -1;  // default to first message selected
-    _message_top = 0;
+    _top = 0;
 
-    _contact_count = 0;
-    for (int slot = 0; slot < the_mesh.getTotalContactSlots() && _contact_count < UI_CONTACTS_LIST_SIZE; slot++) {
+    _dest_count = 0;
+    for (int slot = 0; slot < the_mesh.getTotalContactSlots() && _dest_count < UI_DESTS_LIST_SIZE; slot++) {
       ContactInfo c;
       if (!the_mesh.getContactByIdx(slot, c)) continue;  // no contact in this slot
       if (c.name[0] == 0) continue;  // empty slot
       if (c.type != ADV_TYPE_CHAT) continue;  // Only include chat contacts
-      contacts[_contact_count++] = c;
-    }
-    _contact_idx = (_contact_count > 0) ? 0 : -1;  // default to first contact selected
-  }
 
-  void poll() override {
-    if (_dismiss_after && millis() >= _dismiss_after) {
-      _dismiss_after = 0;
-      _task->gotoHomeScreen();
+      Destination& d = dests[_dest_count++];
+      StrHelper::strncpy(d.name, c.name, sizeof(d.name));
+      d.slot = slot;
+      d.is_channel = false;
     }
+#ifdef MAX_GROUP_CHANNELS
+    for (int slot = 0; slot < MAX_GROUP_CHANNELS && _dest_count < UI_DESTS_LIST_SIZE; slot++) {
+      ChannelDetails ch;
+      if (!the_mesh.getChannel(slot, ch)) continue;  // no channel in this slot
+      if (ch.name[0] == 0) continue;  // empty slot
+
+      Destination& d = dests[_dest_count++];
+      d.name[0] = '#';
+      StrHelper::strncpy(&d.name[1], ch.name, sizeof(d.name) - 1);
+      d.slot = slot;
+      d.is_channel = true;
+    }
+#endif
+    _dest_idx = (_dest_count > 0) ? 0 : -1;  // default to first destination selected
   }
 
   int render(DisplayDriver& display) override {
@@ -709,34 +675,30 @@ public:
     if (_step == MsgSendScreen::MESSAGE) {
       renderTitle(display, "Message");
 
-      int num_visible = numVisibleMessages(display);
-      scrollMessagesIntoView(num_visible);
+      // no prompt on this step, so the list can run to the bottom of the screen
+      int num_visible = numVisible(display.height(), UI_MESSAGE_SLOT_H);
+      scrollIntoView(_message_idx, num_visible, _top);
 
       int y = UI_LIST_TOP_Y;
-      for (int n = 0; n < num_visible && _message_top + n < _message_count; n++, y += UI_MESSAGE_SLOT_H) {
-        int i = _message_top + n;
+      for (int n = 0; n < num_visible && _top + n < _message_count; n++, y += UI_MESSAGE_SLOT_H) {
+        int i = _top + n;
         renderListItem(display, y, i == _message_idx, messages[i], UI_MESSAGE_LINES);
       }
     } else if (_step == MsgSendScreen::DESTINATION) {
       renderTitle(display, "Destination");
 
+      int num_visible = numVisible(display.height() - UI_TEXT_HEIGHT, UI_LIST_ROW_H);  // leave room for the prompt
+      scrollIntoView(_dest_idx, num_visible, _top);
+
       int y = UI_LIST_TOP_Y;
-      for (int i = 0; i < _contact_count; i++, y += UI_LIST_ROW_H) {
-        char filtered_contact_name[sizeof(contacts[i].name)];
-        display.translateUTF8ToBlocks(filtered_contact_name, contacts[i].name, sizeof(filtered_contact_name));
-        renderListItem(display, y, i == _contact_idx, filtered_contact_name, 1);
+      for (int n = 0; n < num_visible && _top + n < _dest_count; n++, y += UI_LIST_ROW_H) {
+        int i = _top + n;
+        char filtered_dest_name[sizeof(dests[i].name)];
+        display.translateUTF8ToBlocks(filtered_dest_name, dests[i].name, sizeof(filtered_dest_name));
+        renderListItem(display, y, i == _dest_idx, filtered_dest_name, 1);
       }
 
       display.drawTextCentered(display.width() / 2, display.height() - UI_TEXT_HEIGHT, "send: " PRESS_LABEL);
-    } else if (_step == MsgSendScreen::SENT) {
-      renderTitle(display, "Sent");
-
-      char filtered_contact_name[sizeof(contacts[0].name)];
-      display.translateUTF8ToBlocks(filtered_contact_name, contacts[_contact_idx].name, sizeof(filtered_contact_name));
-      renderListItem(display, UI_LIST_TOP_Y, false, messages[_message_idx], 1);
-      renderListItem(display, UI_LIST_TOP_Y + UI_LIST_ROW_H, false, filtered_contact_name, 1);
-
-      display.drawTextCentered(display.width() / 2, display.height() - UI_TEXT_HEIGHT, "done: " PRESS_LABEL);
     }
     return 5000;   // next render after 5000 ms
   }
@@ -747,41 +709,30 @@ public:
       return true;
     }
     if (c == KEY_ENTER && _step == MsgSendScreen::MESSAGE) {
-      if (_message_idx < 0 || _message_idx >= _message_count) {
-        _task->showAlert("No message selected", 1000);
-        return false;
-      }
       _step = MsgSendScreen::DESTINATION;
+      _top = 0;
       return true;
     }
     if (c == KEY_ENTER && _step == MsgSendScreen::DESTINATION) {
-      if (_contact_idx < 0 || _contact_idx >= _contact_count) {
-        _task->showAlert("No contact selected", 1000);
-        return false;
-      }
-      uint32_t expected_ack;
-      uint32_t est_timeout;
+      Destination& d = dests[_dest_idx];
+      const char* text = messages[_message_idx];
+      uint32_t timestamp = the_mesh.getRTCClock()->getCurrentTime();
+      bool sent;
 
-      int result = the_mesh.sendMessage(
-            contacts[_contact_idx],
-            the_mesh.getRTCClock()->getCurrentTime(),
-            0,                  // attempt
-            messages[_message_idx],
-            expected_ack,
-            est_timeout
-        );
+      if (d.is_channel) {
+        ChannelDetails ch;
+        sent = the_mesh.getChannel(d.slot, ch)
+            && the_mesh.sendGroupMessage(timestamp, ch.channel, the_mesh.getNodeName(), text, strlen(text));
+      } else {
+        uint32_t expected_ack;
+        uint32_t est_timeout;
+        ContactInfo c;
 
-      if (result == MSG_SEND_FAILED) {
-        _task->showAlert("Send failed", 1000);
-        return false;
+        sent = the_mesh.getContactByIdx(d.slot, c)
+            && the_mesh.sendMessage(c, timestamp, 0 /* attempt */, text, expected_ack, est_timeout) != MSG_SEND_FAILED;
       }
 
-      _task->showAlert("Message sent", 1000);
-      _step = MsgSendScreen::SENT;
-      _dismiss_after = millis() + SENT_SCREEN_MILLIS;  // then return to the home screen
-      return true;
-    }
-    if (c == KEY_ENTER && _step == MsgSendScreen::SENT) {
+      _task->showAlert(sent ? "Message sent" : "Send failed", 1000);   // shown over the home screen
       _task->gotoHomeScreen();
       return true;
     }
@@ -789,8 +740,8 @@ public:
       _message_idx = (_message_idx + 1) % _message_count;
       return true;
     }
-    if ((c == KEY_RIGHT || c == KEY_NEXT) && _step == MsgSendScreen::DESTINATION) {
-      _contact_idx = (_contact_idx + 1) % _contact_count;
+    if ((c == KEY_RIGHT || c == KEY_NEXT) && _step == MsgSendScreen::DESTINATION && _dest_count > 0) {
+      _dest_idx = (_dest_idx + 1) % _dest_count;
       return true;
     }
     return false;  // not implemented yet
