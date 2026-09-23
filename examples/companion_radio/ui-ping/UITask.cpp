@@ -25,12 +25,23 @@
 #endif
 
 #ifndef UI_CONTACTS_LIST_SIZE
-  #define UI_CONTACTS_LIST_SIZE 3
+  #define UI_CONTACTS_LIST_SIZE 5
 #endif
 
 #ifndef UI_MESSAGES_LIST_SIZE
-  #define UI_MESSAGES_LIST_SIZE 4
+  #define UI_MESSAGES_LIST_SIZE 7
 #endif
+
+#ifndef UI_MESSAGE_LINES
+  #define UI_MESSAGE_LINES 2   // lines each message occupies, cut off with "..." beyond that
+#endif
+
+#define UI_TEXT_HEIGHT   8   // one line of size-1 text
+#define UI_TITLE_RULE_Y  9   // horiz rule, just below the title text
+#define UI_ITEM_GAP      2   // between list items; lines within one item are flush
+#define UI_LIST_TOP_Y    (UI_TITLE_RULE_Y + UI_ITEM_GAP)
+#define UI_LIST_ROW_H    (UI_TEXT_HEIGHT + UI_ITEM_GAP)
+#define UI_MESSAGE_SLOT_H ((UI_MESSAGE_LINES * UI_TEXT_HEIGHT) + UI_ITEM_GAP)
 
 #if UI_HAS_JOYSTICK
   #define PRESS_LABEL "press Enter"
@@ -583,6 +594,7 @@ class MsgSendScreen : public UIScreen {
   uint8_t _contact_count;
   int8_t _message_idx;
   uint8_t _message_count;
+  uint8_t _message_top;           // first message shown, when the list is too long to fit
   unsigned long _dismiss_after;   // when to leave the SENT step, 0 = not counting down
 
   ContactInfo contacts[UI_CONTACTS_LIST_SIZE];
@@ -591,21 +603,66 @@ class MsgSendScreen : public UIScreen {
   void renderTitle(DisplayDriver& display, const char* title) {
     display.setCursor(0, 0);
     display.print(title);
-    display.drawRect(0, 11, display.width(), 1);  // horiz line
+    display.drawRect(0, UI_TITLE_RULE_Y, display.width(), 1);  // horiz line
   }
 
-  // prompt for the key that advances this step, eg. "send: long press"
-  void renderPrompt(DisplayDriver& display, const char* action) {
-    display.drawTextCentered(display.width() / 2, display.height() - 11, action);
-  }
+  // one list item at the given y, wrapped over at most max_lines and cut off with an
+  // ellipsis if it still doesn't fit. Marked with "> " when it is the current selection.
+  void renderListItem(DisplayDriver& display, int y, bool selected, const char* text, int max_lines) {
+    int indent = display.getTextWidth("> ");
+    int max_width = display.width() - indent;
+    char line[max_width + 1];
 
-  // one row of a selectable list, marked with "> " when it is the current selection
-  void renderListItem(DisplayDriver& display, int i, bool selected, const char* text) {
-    int y = (i * 9) + 14;
     if (selected) {
       display.drawTextLeftAlign(0, y, "> ");
     }
-    display.drawTextEllipsized(display.getTextWidth("> "), y, display.width() - 2, text);
+
+    for (int n = 0; n < max_lines && *text; n++, y += UI_TEXT_HEIGHT) {
+      if (n == max_lines - 1) {   // last line: ellipsized if any text is left over
+        display.drawTextEllipsized(indent, y, max_width, text);
+        return;
+      }
+
+      int len = 0;            // chars copied into line so far
+      int fits = 0;           // longest prefix known to fit
+      int wrap_at = 0;        // ...that also ends a word
+      bool too_wide = false;
+      while (text[len] && len + 1 < (int)sizeof(line)) {
+        line[len] = text[len];
+        line[++len] = 0;
+        if (display.getTextWidth(line) > max_width) {
+          too_wide = true;
+          break;
+        }
+        fits = len;
+        if (text[len] == ' ') wrap_at = len;
+      }
+
+      int take = (too_wide && wrap_at > 0) ? wrap_at : fits;   // don't split words
+      line[take] = 0;
+
+      display.drawTextLeftAlign(indent, y, line);
+      text += take;
+      while (*text == ' ') text++;   // skip the spaces we broke on
+    }
+  }
+
+  // how many message slots fit below the title rule.
+  int numVisibleMessages(DisplayDriver& display) {
+    // the last message needs room for its text, but not for the gap that follows it
+    int num = (display.height() - UI_LIST_TOP_Y + UI_ITEM_GAP) / UI_MESSAGE_SLOT_H;
+    return (num < 1) ? 1 : num;
+  }
+
+  // scrolls the message list so the selected message is visible
+  void scrollMessagesIntoView(int num_visible) {
+    if (_message_idx < 0) {
+      _message_top = 0;
+    } else if (_message_idx < _message_top) {
+      _message_top = _message_idx;
+    } else if (_message_idx >= _message_top + num_visible) {
+      _message_top = _message_idx - num_visible + 1;
+    }
   }
 
 public:
@@ -618,10 +675,15 @@ public:
     _dismiss_after = 0;
 
     _message_count = 0;
-    messages[_message_count++] = "Ping";
+    messages[_message_count++] = "Can I go the library?";
+    messages[_message_count++] = "Can I stay at the playground?";
+    messages[_message_count++] = "I am heading home.";
+    messages[_message_count++] = "Can I stay longer?";
     messages[_message_count++] = "Yes";
     messages[_message_count++] = "No";
+    messages[_message_count++] = "Where are you?";
     _message_idx = (_message_count > 0) ? 0 : -1;  // default to first message selected
+    _message_top = 0;
 
     _contact_count = 0;
     for (int slot = 0; slot < the_mesh.getTotalContactSlots() && _contact_count < UI_CONTACTS_LIST_SIZE; slot++) {
@@ -647,30 +709,34 @@ public:
     if (_step == MsgSendScreen::MESSAGE) {
       renderTitle(display, "Message");
 
-      for (int i = 0; i < _message_count; i++) {
-        renderListItem(display, i, i == _message_idx, messages[i]);
-      }
+      int num_visible = numVisibleMessages(display);
+      scrollMessagesIntoView(num_visible);
 
-      renderPrompt(display, "select: " PRESS_LABEL);
+      int y = UI_LIST_TOP_Y;
+      for (int n = 0; n < num_visible && _message_top + n < _message_count; n++, y += UI_MESSAGE_SLOT_H) {
+        int i = _message_top + n;
+        renderListItem(display, y, i == _message_idx, messages[i], UI_MESSAGE_LINES);
+      }
     } else if (_step == MsgSendScreen::DESTINATION) {
       renderTitle(display, "Destination");
 
-      for (int i = 0; i < _contact_count; i++) {
+      int y = UI_LIST_TOP_Y;
+      for (int i = 0; i < _contact_count; i++, y += UI_LIST_ROW_H) {
         char filtered_contact_name[sizeof(contacts[i].name)];
         display.translateUTF8ToBlocks(filtered_contact_name, contacts[i].name, sizeof(filtered_contact_name));
-        renderListItem(display, i, i == _contact_idx, filtered_contact_name);
+        renderListItem(display, y, i == _contact_idx, filtered_contact_name, 1);
       }
 
-      renderPrompt(display, "send: " PRESS_LABEL);
+      display.drawTextCentered(display.width() / 2, display.height() - UI_TEXT_HEIGHT, "send: " PRESS_LABEL);
     } else if (_step == MsgSendScreen::SENT) {
       renderTitle(display, "Sent");
 
       char filtered_contact_name[sizeof(contacts[0].name)];
       display.translateUTF8ToBlocks(filtered_contact_name, contacts[_contact_idx].name, sizeof(filtered_contact_name));
-      renderListItem(display, 0, false, messages[_message_idx]);
-      renderListItem(display, 1, false, filtered_contact_name);
+      renderListItem(display, UI_LIST_TOP_Y, false, messages[_message_idx], 1);
+      renderListItem(display, UI_LIST_TOP_Y + UI_LIST_ROW_H, false, filtered_contact_name, 1);
 
-      renderPrompt(display, "done: " PRESS_LABEL);
+      display.drawTextCentered(display.width() / 2, display.height() - UI_TEXT_HEIGHT, "done: " PRESS_LABEL);
     }
     return 5000;   // next render after 5000 ms
   }
