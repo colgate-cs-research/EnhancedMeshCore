@@ -28,7 +28,7 @@
 #endif
 
 #ifndef UI_MESSAGES_LIST_SIZE
-  #define UI_MESSAGES_LIST_SIZE 7
+  #define UI_MESSAGES_LIST_SIZE 11
 #endif
 
 #ifndef UI_MESSAGE_LINES
@@ -631,10 +631,14 @@ public:
     _step = 0;
 
     _message_count = 0;
-    messages[_message_count++] = "Can I go the library?";
+    messages[_message_count++] = "Hello";
+    messages[_message_count++] = "Did you receive my message?";
     messages[_message_count++] = "Can I stay at the playground?";
-    messages[_message_count++] = "I am heading home.";
+    messages[_message_count++] = "Can I go to the library?";
+    messages[_message_count++] = "Can a friend come over?";
+    messages[_message_count++] = "Can I go to a friend's house?";
     messages[_message_count++] = "Can I stay longer?";
+    messages[_message_count++] = "I am heading home";
     messages[_message_count++] = "Yes";
     messages[_message_count++] = "No";
     messages[_message_count++] = "Where are you?";
