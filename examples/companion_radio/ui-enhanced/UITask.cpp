@@ -27,10 +27,6 @@
   #define UI_DESTS_LIST_SIZE 12   // total destinations offered, not how many fit on screen
 #endif
 
-#ifndef UI_MESSAGES_LIST_SIZE
-  #define UI_MESSAGES_LIST_SIZE 11
-#endif
-
 #ifndef UI_MESSAGE_LINES
   #define UI_MESSAGE_LINES 2   // lines each message occupies, cut off with "..." beyond that
 #endif
@@ -555,7 +551,7 @@ class MsgSendScreen : public UIScreen {
   uint8_t _top;                   // first item shown of whichever list this step lists
 
   Destination dests[UI_DESTS_LIST_SIZE];
-  const char* messages[UI_MESSAGES_LIST_SIZE];
+  const char* messages[NUM_QUICK_MSGS];
 
   void renderTitle(DisplayDriver& display, const char* title) {
     display.setCursor(0, 0);
@@ -631,17 +627,11 @@ public:
     _step = 0;
 
     _message_count = 0;
-    messages[_message_count++] = "Hello";
-    messages[_message_count++] = "Did you receive my message?";
-    messages[_message_count++] = "Can I stay at the playground?";
-    messages[_message_count++] = "Can I go to the library?";
-    messages[_message_count++] = "Can a friend come over?";
-    messages[_message_count++] = "Can I go to a friend's house?";
-    messages[_message_count++] = "Can I stay longer?";
-    messages[_message_count++] = "I am heading home";
-    messages[_message_count++] = "Yes";
-    messages[_message_count++] = "No";
-    messages[_message_count++] = "Where are you?";
+    NodePrefs* prefs = the_mesh.getNodePrefs();
+    for (int i = 0; i < NUM_QUICK_MSGS; i++) {
+      if (prefs->quick_msgs[i][0] == 0) continue;   // unset, see 'set qmsgN'
+      messages[_message_count++] = prefs->quick_msgs[i];
+    }
     _message_idx = (_message_count > 0) ? 0 : -1;  // default to first message selected
     _top = 0;
 
@@ -713,6 +703,10 @@ public:
       return true;
     }
     if (c == KEY_ENTER && _step == MsgSendScreen::MESSAGE) {
+      if (_message_idx < 0) {   // every qmsg pref is empty
+        _task->showAlert("No messages", 1000);
+        return true;
+      }
       _step = MsgSendScreen::DESTINATION;
       _top = 0;
       return true;
@@ -1170,6 +1164,7 @@ char UITask::checkDisplayOn(char c) {
 char UITask::handleLongPress(char c) {
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
+    showAlert("CLI rescue", 2000);
     c = 0;   // consume event
   }
   return c;

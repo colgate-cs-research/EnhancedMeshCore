@@ -6,6 +6,9 @@
 #define TELEM_MODE_ALLOW_FLAGS     1     // use contact.flags
 #define TELEM_MODE_ALLOW_ALL       2
 
+#define NUM_QUICK_MSGS        10
+#define QUICK_MSG_LEN         64
+
 #define ADVERT_LOC_NONE       0
 #define ADVERT_LOC_SHARE      1
 
@@ -40,6 +43,7 @@ public:
   uint8_t autoadd_max_hops = 0;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
   char default_scope_name[31];
   uint8_t default_scope_key[16];
+  char quick_msgs[NUM_QUICK_MSGS][QUICK_MSG_LEN];   // the UI's preset message list
 
 private:
   class RadioPrefs : public ConfigSerializer {  // COPIED from CommonCLI (for now)
@@ -112,6 +116,11 @@ private:
       def("vibe_q", _parent->vibe_quiet);
       def("auto_add", _parent->autoadd_config);    // bitmask for auto-add contacts config
       def("man_add", _parent->manual_add_contacts);
+      char qmsg_key[8];
+      for (int i = 0; i < NUM_QUICK_MSGS; i++) {
+        sprintf(qmsg_key, "qmsg%c", 'a' + i);   // NOTE: digits are not valid key chars
+        def(qmsg_key, _parent->quick_msgs[i], sizeof(_parent->quick_msgs[i]));
+      }
       def("tel_base", _parent->telemetry_mode_base);
       def("tel_loc", _parent->telemetry_mode_loc);
       def("tel_env", _parent->telemetry_mode_env);
@@ -136,6 +145,17 @@ protected:
 public:
   NodePrefs() : radio(this), gps(this), companion(this) {
     node_name[0] = 0;
+
+    static const char* DEFAULT_QUICK_MSGS[] = {
+      "Hello",
+      "Test",
+      "Yes",
+      "No",
+    };
+    memset(quick_msgs, 0, sizeof(quick_msgs));
+    for (int i = 0; i < NUM_QUICK_MSGS && i < (int)(sizeof(DEFAULT_QUICK_MSGS)/sizeof(DEFAULT_QUICK_MSGS[0])); i++) {
+      strncpy(quick_msgs[i], DEFAULT_QUICK_MSGS[i], sizeof(quick_msgs[i]) - 1);
+    }
     default_scope_name[0] = 0;
     memset(default_scope_key, 0, sizeof(default_scope_key));
   }

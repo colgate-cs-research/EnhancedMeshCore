@@ -2080,8 +2080,22 @@ void MyMesh::checkCLIRescueCmd() {
         _prefs.ble_pin = atoi(&config[4]);
         savePrefs();
         Serial.printf("  > pin is now %06d\n", _prefs.ble_pin);
+      } else if (memcmp(config, "qmsg", 4) == 0) {   // e.g: "set qmsg0 Where are you?"
+        char* text;
+        long idx = strtol(&config[4], &text, 10);
+        if (text > &config[4] && *text == ' ' && idx >= 0 && idx < NUM_QUICK_MSGS) {
+          StrHelper::strncpy(_prefs.quick_msgs[idx], text + 1, sizeof(_prefs.quick_msgs[idx]));
+          savePrefs();
+          Serial.printf("  > qmsg%ld is now %s\n", idx, _prefs.quick_msgs[idx]);
+        } else {
+          Serial.printf("  Error: expected 'qmsg<0-%d> <text>'\n", NUM_QUICK_MSGS - 1);
+        }
       } else {
         Serial.printf("  Error: unknown config: %s\n", config);
+      }
+    } else if (strcmp(cli_command, "get qmsgs") == 0) {
+      for (int i = 0; i < NUM_QUICK_MSGS; i++) {
+        Serial.printf("  qmsg%d: %s\n", i, _prefs.quick_msgs[i]);
       }
     } else if (strcmp(cli_command, "rebuild") == 0) {
       bool success = _store->formatFileSystem();
